@@ -1,24 +1,26 @@
 # npu-smi-enhanced
 
-一个面向华为昇腾 NPU 的轻量级命令行监控工具，以类似 `nvidia-smi` 的表格展示设备状态和进程显存占用。
+**English** | [简体中文](README.zh-CN.md)
 
-通过 Python 标准库 `ctypes` 调用本机 Ascend 驱动的 DCMI 接口，不需要安装 PyTorch、torch-npu 或第三方 Python 包。监控过程只调用查询和初始化接口，不创建 ACL 计算上下文。
+A lightweight command-line monitor for Huawei Ascend NPUs, with an `nvidia-smi`-style view of device health, utilization, memory, and running processes.
 
-## 能看到什么
+The tool calls the local Ascend driver's DCMI interfaces through Python's standard-library `ctypes` module. It requires no PyTorch, torch-npu, or third-party Python packages. Monitoring uses initialization and query interfaces only, without creating an ACL compute context.
 
-- 设备逻辑 ID、型号、Card/Chip 映射、PCIe Bus ID、健康状态。
-- 驱动版本、CANN 版本、当前时间。
-- 温度、功耗、AI Core 当前频率。
-- **AI Core 利用率**、HBM 带宽利用率。
-- HBM 已用容量、总容量、内存占用百分比。
-- 每个 NPU 上的进程 PID、显存占用及命令行。
-- 定时刷新，以及便于脚本处理的 JSON 输出。
+## Features
 
-> AI Core 利用率与内存占用率是两个不同指标。本工具会分别展示，避免把“显存占了 85%”误读成“算力使用了 85%”。
+- Logical device IDs, model names, Card/Chip mappings, PCIe bus IDs, and health status.
+- Driver and CANN versions, with a timestamp for each snapshot.
+- Temperature, power readings, and current AI Core frequency.
+- **AI Core utilization** and HBM bandwidth utilization.
+- Used and total HBM capacity, with memory usage percentages.
+- Per-device process IDs, memory consumption, and command lines.
+- Periodic refresh and JSON output for scripts.
 
-## 输出预览
+> AI Core utilization and memory usage are separate metrics. Using 85% of device memory does not mean that compute utilization is 85%.
 
-以下为缩减后的示意数据，进程名称和 PID 为示例：
+## Preview
+
+The abbreviated example below uses illustrative values and a sample process name and PID:
 
 ```text
 +--------------------------------------+--------------------------------+---------------------------------+
@@ -36,22 +38,22 @@
 +---------------------------------------------------------------------------------------------------------+
 ```
 
-## 环境要求与验证范围
+## Requirements and tested environment
 
-| 项目 | 要求 / 已验证环境 |
+| Component | Requirement / tested configuration |
 | --- | --- |
-| 操作系统 | 64 位 Linux，能够访问 Ascend 驱动和 NPU 设备 |
-| Python | Python 3.6+，仅使用标准库 |
-| 驱动库 | `/usr/local/Ascend/driver/lib64/driver/libdcmi.so` |
-| 已验证设备 | 驱动报告为 `Ascend 9382`，8 个 Card、16 个逻辑 NPU |
-| 已验证驱动 | `25.5.2` |
-| 已验证 CANN | `9.1.0` |
+| Operating system | 64-bit Linux with access to the Ascend driver and NPU devices |
+| Python | Python 3.6+; standard library only |
+| Driver library | `/usr/local/Ascend/driver/lib64/driver/libdcmi.so` |
+| Tested devices | Reported by the driver as `Ascend 9382`; 8 Cards and 16 logical NPUs |
+| Tested driver | `25.5.2` |
+| Tested CANN | `9.1.0` |
 
-首版针对上述环境实现，尚未在所有昇腾型号、驱动版本和容器部署方式上验证。`ctypes` 结构体依据该环境的 `dcmi_interface_api.h` 定义；使用其他驱动版本前，应确认接口和结构体兼容。
+This initial version targets the configuration above. Other Ascend models, driver versions, and container setups have not been verified. The `ctypes` structures follow that driver's `dcmi_interface_api.h`; check interface and structure compatibility before using a different driver version.
 
-硬件查询本身不依赖 Python ACL。CANN 版本读取失败时显示 `N/A`，不会阻止其他指标查询。
+Hardware queries do not require Python ACL. If the CANN version cannot be read, it is displayed as `N/A` while other queries continue.
 
-## 快速开始
+## Quick start
 
 ```bash
 git clone https://github.com/xuetongchenbianchen/npu-smi-enhanced.git
@@ -60,16 +62,16 @@ cd npu-smi-enhanced
 python3 ./npu-smi-enhanced
 ```
 
-### 安装为独立命令
+### Install as a separate command
 
-推荐保留现有系统命令，把本工具安装为 `npu-smi-enhanced`：
+Install as `npu-smi-enhanced` to keep your existing system command available:
 
 ```bash
 sudo install -m 0755 ./npu-smi-enhanced /usr/local/bin/npu-smi-enhanced
 npu-smi-enhanced
 ```
 
-没有系统目录写权限时，可以安装到用户目录：
+For a user-local installation:
 
 ```bash
 mkdir -p "$HOME/.local/bin"
@@ -77,9 +79,9 @@ install -m 0755 ./npu-smi-enhanced "$HOME/.local/bin/npu-smi-enhanced"
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-### 可选：使用 `npu-smi` 命令名
+### Optional: use the `npu-smi` command name
 
-如果你希望像原来的简易脚本一样，直接输入 `npu-smi`，先备份同路径下已有的文件：
+To run this tool as `npu-smi`, first back up any existing file at the destination:
 
 ```bash
 if [ -e /usr/local/bin/npu-smi ]; then
@@ -92,92 +94,92 @@ command -v npu-smi
 npu-smi
 ```
 
-本工具只实现本文列出的监控参数，**不兼容原厂 `npu-smi` 的全部子命令**。已有原厂工具时，建议使用独立命令名。
+Only the monitoring options documented here are implemented. This tool **does not support all subcommands of the official `npu-smi` utility**. Use the separate command name if the official utility is already installed.
 
-## 使用方法
+## Usage
 
 ```bash
-# 单次查询（info 可以省略）
+# Take one snapshot; "info" is optional
 npu-smi-enhanced
 npu-smi-enhanced info
 
-# 每次采集完成后等待 2 秒再刷新；Ctrl+C 退出
+# Wait 2 seconds after each snapshot; press Ctrl+C to exit
 npu-smi-enhanced -l 2
 
-# 输出完整 JSON，含未截断的进程命令行及查询错误
+# Print JSON, including full process command lines and query errors
 npu-smi-enhanced --json
 
-# 持续输出 JSON Lines，每次快照占一行
+# Stream JSON Lines: one snapshot per line
 npu-smi-enhanced --json -l 2
 
-# 帮助
+# Show help
 npu-smi-enhanced --help
 ```
 
-安装为 `npu-smi` 后，将上述命令名替换为 `npu-smi` 即可。`-l` 必须是大于零的有限数字；实际两次采样开始的间隔为查询耗时加等待时间。在交互终端中自动清屏刷新，重定向输出时按快照追加。
+If installed as `npu-smi`, substitute that command name in these examples. The `-l` value must be a positive, finite number. The interval between snapshot starts includes both query time and the requested delay. Table output refreshes in place in an interactive terminal; redirected output appends successive snapshots.
 
-### JSON 输出
+### JSON output
 
-顶层字段包括 `timestamp`、`driver`、`cann`、`devices` 和 `query_errors`。
+Top-level fields are `timestamp`, `driver`, `cann`, `devices`, and `query_errors`.
 
-每个设备对象包含以下核心字段：
+Each device object includes:
 
-| 字段 | 含义 |
+| Field | Meaning |
 | --- | --- |
-| `npu` | DCMI 返回的逻辑设备 ID |
-| `card` / `chip` | DCMI Card ID / Card 内芯片 ID |
-| `name` / `bus_id` | 型号 / PCIe 地址 |
-| `health` | 驱动返回的健康状态码 |
-| `temperature_c` / `power_w` / `clock_mhz` | 温度 / 功耗 / AI Core 频率 |
-| `aicore_percent` | AI Core 利用率，百分比 |
-| `memory_used_mib` / `memory_total_mib` | HBM 已用 / 总容量 |
-| `memory_percent` | HBM 已用容量占比 |
-| `hbm_bandwidth_percent` | HBM 带宽利用率 |
-| `processes` | 进程数组，每项含 `pid`、`memory_mib`、`command` |
+| `npu` | Logical device ID returned by DCMI |
+| `card` / `chip` | DCMI Card ID / chip ID within that Card |
+| `name` / `bus_id` | Device model / PCIe address |
+| `health` | Health status code returned by the driver |
+| `temperature_c` / `power_w` / `clock_mhz` | Temperature / power / AI Core frequency |
+| `aicore_percent` | AI Core utilization, as a percentage |
+| `memory_used_mib` / `memory_total_mib` | Used / total HBM capacity |
+| `memory_percent` | Percentage of HBM capacity in use |
+| `hbm_bandwidth_percent` | HBM bandwidth utilization |
+| `processes` | Process array; each entry contains `pid`, `memory_mib`, and `command` |
 
-不可用的指标输出为 `null`。`processes: []` 表示查询成功但没有返回进程，`processes: null` 表示查询不可用。局部查询失败会保留其他成功指标，并记录到 `query_errors`；初始化或设备枚举失败则打印错误并以非零状态退出。
+Unavailable metrics are `null`. `processes: []` means the query succeeded and returned no processes; `processes: null` means the query was unavailable. Individual query failures leave other metrics intact and are recorded in `query_errors`. Initialization or device enumeration failures print an error and exit with a nonzero status.
 
-## 如何理解数据
+## Understanding the readings
 
-### HBM 容量与旧版 ACL 脚本不同
+### HBM capacity versus ACL memory queries
 
-本工具显示 DCMI 报告的完整 HBM 容量，包括设备系统内存占用。原先使用 `acl.rt.get_mem_info()` 的脚本展示的是运行时的内存口径，两者可能不同。例如，同一设备可能在这里显示 `65536 MiB`，在 ACL 脚本中显示约 `62740 MiB`。
+This tool displays the full HBM capacity reported by DCMI, including memory used by the device system. Scripts based on `acl.rt.get_mem_info()` use the runtime's memory accounting, which can differ. For example, the same device may show `65536 MiB` here and approximately `62740 MiB` in an ACL-based script.
 
-进程显存之和不一定等于设备已用显存：设备系统、驱动等也会占用内存，各项查询也并非原子快照。
+The sum of process memory usage may differ from total device memory usage. Device system and driver allocations also consume memory, and the individual queries do not form an atomic snapshot.
 
-### 设备编号与容器进程
+### Device IDs and container processes
 
-- `NPU` 列使用驱动逻辑 ID；`[Card/Chip]` 展示实际 DCMI 映射，不把 Card ID 当作逻辑 NPU ID。
-- 枚举范围由 DCMI 和设备访问权限决定，不按 `ASCEND_RT_VISIBLE_DEVICES` 或框架自身的可见设备列表筛选。
-- 进程 PID 来自驱动，命令行从当前环境的 `/proc/<pid>/cmdline` 读取。
-- 容器 PID 命名空间或权限可能使某些命令行不可读，此时显示 `[PID not visible in this namespace]`；不做宿主机 PID 与容器 PID 的自动映射。
-- 表格会简化绝对路径并截断长命令，`--json` 保留完整命令行。分享 JSON 前请检查命令行中是否包含私密参数。
+- The `NPU` column uses driver logical IDs; `[Card/Chip]` shows the DCMI mapping. Card IDs are not treated as logical NPU IDs.
+- Enumeration follows DCMI and device access permissions. It does not filter devices according to `ASCEND_RT_VISIBLE_DEVICES` or a framework's visible-device list.
+- Process IDs come from the driver. Command lines are read from `/proc/<pid>/cmdline` in the current environment.
+- Container PID namespaces or permissions may prevent command-line lookup, producing `[PID not visible in this namespace]`. Host-to-container PID translation is not implemented.
+- Table output shortens absolute paths and truncates long commands. `--json` preserves full command lines; check for private arguments before sharing that output.
 
-### 功耗与其他指标
+### Power and other metrics
 
-功耗按 DCMI 接口的原始值转换为瓦特，其采样范围和更新频率取决于硬件及驱动；不要直接把所有逻辑 NPU 的读数相加当作整机功耗。工具不估算功耗上限、风扇转速或 NVIDIA 特有的性能状态。
+Power readings are converted from DCMI values to watts. Their measurement scope and update frequency depend on the hardware and driver; summing readings across logical NPUs does not necessarily give whole-system power. The tool does not estimate power limits, fan speeds, or NVIDIA-specific performance states.
 
-## 常见问题
+## Troubleshooting
 
-**找不到 `libdcmi.so`**
+**`libdcmi.so` cannot be found**
 
-确认已安装 Ascend 驱动，且上述库路径存在。容器中还需由运行环境正确提供驱动库、其依赖及设备节点。首版使用固定的默认驱动路径。
+Check that the Ascend driver is installed and the library exists at the path listed above. Containers also need access to the driver library, its dependencies, and device nodes. This initial version uses a fixed default driver path.
 
-**`dcmi_init failed` 或设备枚举失败**
+**`dcmi_init failed` or device enumeration fails**
 
-检查驱动状态、设备节点和当前用户权限。需要管理员权限的部署环境可用 `sudo` 执行。该工具不会自动修复驱动或修改设备配置。
+Check driver health, device nodes, and your user's permissions. Use `sudo` if your deployment requires administrator access. The tool does not repair drivers or change device configuration.
 
-**某些字段为 `N/A`**
+**Some fields show `N/A`**
 
-执行 `npu-smi-enhanced --json`，查看 `query_errors`。这通常表示接口缺失、当前硬件不支持或权限受限。工具不会把失败查询显示成零。
+Run `npu-smi-enhanced --json` and inspect `query_errors`. Missing interfaces, unsupported hardware, or access restrictions may cause these errors. Failed queries are not displayed as zero.
 
-**CANN 版本为 `N/A`**
+**The CANN version shows `N/A`**
 
-目前检查 toolkit 的默认 `latest` 路径和已验证环境的 CANN 9.1.0 路径；自定义安装目录可能无法识别版本。
+Version discovery currently checks the toolkit's default `latest` paths and the CANN 9.1.0 path used in the tested environment. Custom installation paths may not be detected.
 
-**恢复先前的简易脚本**
+**Restore the previous script**
 
-如果按上面的步骤做了备份，可以恢复：
+If you created the backup described above:
 
 ```bash
 sudo cp --preserve=mode,timestamps \
@@ -185,10 +187,10 @@ sudo cp --preserve=mode,timestamps \
 hash -r
 ```
 
-## 实现与验证
+## Implementation and validation
 
-主程序为单个可执行 Python 文件。开发时已在上述 16 个逻辑 NPU 上验证设备枚举、编号唯一性、指标范围、查询返回码和表格对齐，并检查进程查询和 JSON 输出。
+The program is a single executable Python file. Validation on the 16 logical NPUs listed above covered enumeration, unique logical IDs, metric ranges, query return codes, table alignment, process queries, and JSON output.
 
-接口依据本机驱动头文件 `/usr/local/Ascend/driver/include/dcmi_interface_api.h`。可参考[昇腾 DCMI 设备管理接口文档](https://www.hiascend.com/doc_center/source/zh/HDK/2610/A3/A3DCMI/dcmia3_006.html)。
+Interface definitions are based on `/usr/local/Ascend/driver/include/dcmi_interface_api.h` from the tested environment. See also the [Ascend DCMI device management documentation](https://www.hiascend.com/doc_center/source/zh/HDK/2610/A3/A3DCMI/dcmia3_006.html).
 
-本项目为独立监控脚本，并非华为官方 `npu-smi`。
+This is an independent monitoring script, not Huawei's official `npu-smi` utility.
