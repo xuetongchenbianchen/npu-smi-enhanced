@@ -1,0 +1,228 @@
+#!/usr/bin/env python3
+"""Read-only Ascend DCMI monitor. Structures match the installed driver header."""
+import argparse
+import ctypes as C
+import datetime
+import json
+import math
+from pathlib import Path
+import sys
+import time
+
+
+class Chip(C.Structure):
+    _fields_ = [("chip_type", C.c_char * 32), ("chip_name", C.c_char * 32),
+                ("chip_ver", C.c_char * 32), ("aicore_cnt", C.c_uint),
+                ("npu_name", C.c_char * 32)]
+
+
+class PCI(C.Structure):
+    _fields_ = [(n, C.c_uint) for n in
+                ("vendor", "subvendor", "device", "subdevice")] + [
+                    ("domain", C.c_int)] + [(n, C.c_uint) for n in
+                ("bus", "slot", "func")] + [("reserve", C.c_ubyte * 32)]
+
+
+class HBM(C.Structure):
+    _fields_ = [("size", C.c_ulonglong), ("freq", C.c_uint),
+                ("used", C.c_ulonglong), ("temp", C.c_int), ("bandwidth", C.c_uint)]
+
+
+class Core(C.Structure):
+    _fields_ = [("freq", C.c_uint), ("cur_freq", C.c_uint)]
+
+
+class Process(C.Structure):
+    _fields_ = [("pid", C.c_int), ("memory", C.c_ulong)]
+
+
+class Monitor:
+    def __init__(self):
+        self.lib = C.CDLL("/usr/local/Ascend/driver/lib64/driver/libdcmi.so")
+        self.errors = []
+        self.required("dcmi_init")
+
+    def call(self, name, *args):
+        try:
+            fn = getattr(self.lib, name)
+        except AttributeError:
+            self.errors.append(f"{name}: unavailable")
+            return -1
+        fn.restype = C.c_int
+        rc = fn(*args)
+        if rc:
+            self.errors.append(f"{name}: {rc}")
+        return rc
+
+    def required(self, name, *args):
+        rc = self.call(name, *args)
+        if rc:
+            raise RuntimeError(f"{name} failed ({rc})")
+
+    def query(self, name, card, device, cls=C.c_uint, extra=()):
+        value = cls()
+        if self.call(name, card, device, *extra, C.byref(value)):
+            return None
+        return value.value if hasattr(value, "value") else value
+
+    def snapshot(self):
+        self.errors = []
+        count, cards = C.c_int(), (C.c_int * 64)()
+        self.required("dcmi_get_card_list", C.byref(count), cards, 64)
+        if not 0 <= count.value <= 64:
+            raise RuntimeError("Invalid card count")
+        devices = []
+        for card in cards[:count.value]:
+            maximum, mcu, cpu = C.c_int(), C.c_int(), C.c_int()
+            self.required("dcmi_get_device_id_in_card", card, C.byref(maximum),
+                          C.byref(mcu), C.byref(cpu))
+            if not 0 <= maximum.value <= 64:
+                raise RuntimeError("Invalid chip count")
+            for device in range(maximum.value):
+                q = lambda name, cls=C.c_uint, extra=(): self.query(name, card, device, cls, extra)
+                logic = C.c_int()
+                rc = self.call("dcmi_get_device_logic_id", C.byref(logic), card, device)
+                row = {"npu": logic.value if rc == 0 else None, "card": card, "chip": device}
+                chip = q("dcmi_get_device_chip_info_v2", Chip)
+                row["name"] = (chip.chip_type + b" " + (chip.npu_name or chip.chip_name)).decode(errors="replace").strip() if chip else None
+                pci = q("dcmi_get_device_pcie_info_v2", PCI)
+                row["bus_id"] = f"{pci.domain:04X}:{pci.bus:02X}:{pci.slot:02X}.{pci.func}" if pci else None
+                row["health"] = q("dcmi_get_device_health")
+                row["temperature_c"] = q("dcmi_get_device_temperature", C.c_int)
+                power = q("dcmi_get_device_power_info", C.c_int)
+                row["power_w"] = power / 10 if power is not None else None
+                row["aicore_percent"] = q("dcmi_get_device_utilization_rate", extra=(2,))
+                hbm = q("dcmi_get_device_hbm_info", HBM)
+                row["memory_used_mib"] = hbm.used if hbm and hbm.size else None
+                row["memory_total_mib"] = hbm.size if hbm and hbm.size else None
+                row["memory_percent"] = round(100 * hbm.used / hbm.size, 1) if hbm and hbm.size else None
+                row["hbm_bandwidth_percent"] = hbm.bandwidth if hbm else None
+                core = q("dcmi_get_device_aicore_info", Core)
+                row["clock_mhz"] = core.cur_freq if core else None
+                # DCMI supports up to 32 processes/device; reserve extra space defensively.
+                processes, number = (Process * 256)(), C.c_int(256)
+                rc = self.call("dcmi_get_device_resource_info", card, device, processes, C.byref(number))
+                row["processes"] = None
+                if rc == 0 and 0 <= number.value <= 256:
+                    row["processes"] = [
+                        {"pid": p.pid, "memory_mib": round(p.memory / 1024**2, 1),
+                         "command": process_name(p.pid)} for p in processes[:number.value]]
+                devices.append(row)
+        return {"timestamp": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+                "driver": version("/usr/local/Ascend/driver/version.info", "Version"),
+                "cann": version("/usr/local/Ascend/ascend-toolkit/latest/version.cfg", "version"),
+                "devices": devices, "query_errors": sorted(set(self.errors))}
+
+
+def version(path, key):
+    paths = [Path(path)]
+    if key == "version":
+        paths += [Path("/usr/local/Ascend/ascend-toolkit/latest/share/info/runtime/version.info"),
+                  Path("/usr/local/Ascend/cann-9.1.0/share/info/runtime/version.info")]
+    for item in paths:
+        try:
+            for line in item.read_text().splitlines():
+                k, sep, value = line.partition("=")
+                if sep and k.strip().lower() == key.lower():
+                    return value.strip()
+        except OSError:
+            pass
+    return "N/A"
+
+
+def process_name(pid):
+    try:
+        return Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace").strip() or "[exited]"
+    except OSError:
+        return "[PID not visible in this namespace]"
+
+
+def fmt(value, suffix=""):
+    return "N/A" if value is None else f"{value}{suffix}"
+
+
+def short_command(command):
+    # Keep the actual script visible when Python lives in a long virtualenv path.
+    parts = command.split()
+    return " ".join(Path(p).name if p.startswith("/") else p for p in parts)
+
+
+def safe(value):
+    return str(value).encode("ascii", "replace").decode().translate({c: 32 for c in range(32)})
+
+
+def render(data):
+    widths = (36, 30, 31)
+    sep = "+" + "+".join("-" * (w + 2) for w in widths) + "+"
+    def line(*cells):
+        print("| " + " | ".join(safe(c)[:w].ljust(w) for c, w in zip(cells, widths)) + " |")
+    print(data["timestamp"])
+    print(sep)
+    line("NPU-SMI (DCMI)", "Driver: " + data["driver"], "CANN: " + data["cann"])
+    print(sep)
+    line("NPU  Name  [Card/Chip]", "Bus-Id / Health", "HBM Memory-Usage")
+    line("Temp   Power   AI-Core Clock", "AI-Core Util / HBM BW", "Memory Used / Total / Used %")
+    print(sep.replace("-", "="))
+    for d in data["devices"]:
+        health = {0: "OK", 1: "Warning", 2: "Alarm", 3: "Critical"}.get(d["health"], fmt(d["health"]))
+        line(f'{fmt(d["npu"]):>3}  {fmt(d["name"])} [{d["card"]}/{d["chip"]}]',
+             f'{fmt(d["bus_id"])} / {health}',
+             f'{fmt(d["memory_used_mib"])} / {fmt(d["memory_total_mib"])} MiB')
+        line(f'{fmt(d["temperature_c"], "C")}   {fmt(d["power_w"], "W")}   {fmt(d["clock_mhz"], "MHz")}',
+             f'{fmt(d["aicore_percent"], "%")} / {fmt(d["hbm_bandwidth_percent"], "%")}',
+             f'Memory Used: {fmt(d["memory_percent"], "%")}')
+        print(sep)
+    full_width = len(sep) - 4
+    def full(text):
+        print("| " + safe(text)[:full_width].ljust(full_width) + " |")
+    full("Processes:  NPU       PID   Type    NPU Memory   Process command")
+    print("+" + "=" * (len(sep) - 2) + "+")
+    for d in data["devices"]:
+        if d["processes"] is None:
+            full(f'            {fmt(d["npu"]):>3}       N/A   Process query unavailable')
+        elif not d["processes"]:
+            full(f'            {fmt(d["npu"]):>3}             No running processes reported')
+        else:
+            for p in d["processes"]:
+                prefix = f'            {fmt(d["npu"]):>3} {p["pid"]:>9}      C {p["memory_mib"]:>9.1f}MiB   '
+                command = short_command(p["command"])
+                available = full_width - len(prefix)
+                if len(command) > available:
+                    command = command[:available - 3] + "..."
+                full(prefix + command)
+    print("+" + "-" * (len(sep) - 2) + "+")
+    print("NPU = driver logical ID; N/A = unavailable. HBM includes device/system memory.")
+    print("Process PIDs are driver-reported; names require visibility in this PID namespace.")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("command", nargs="?", choices=["info"], default="info")
+    parser.add_argument("--json", action="store_true", help="full data and query errors as JSON")
+    parser.add_argument("-l", "--loop", type=float, metavar="SECONDS", help="refresh interval")
+    args = parser.parse_args()
+    if args.loop is not None and (not math.isfinite(args.loop) or args.loop <= 0):
+        parser.error("refresh interval must be positive and finite")
+    monitor = Monitor()
+    while True:
+        data = monitor.snapshot()
+        if args.loop and sys.stdout.isatty() and not args.json:
+            print("\033[2J\033[H", end="")
+        if args.json:
+            print(json.dumps(data, ensure_ascii=True), flush=True)
+        else:
+            render(data)
+            sys.stdout.flush()
+        if args.loop is None:
+            return
+        time.sleep(args.loop)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass
+    except (OSError, RuntimeError) as error:
+        print(f"npu-smi: {error}", file=sys.stderr)
+        sys.exit(1)
